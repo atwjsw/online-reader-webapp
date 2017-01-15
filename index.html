@@ -380,10 +380,10 @@ html {
         var Util = (function() {
             var prefix = 'html5_reader_';
             var StorageGetter = function(key) {
-                return window.localStorage.getItem(key);
+                return window.localStorage.getItem(prefix + key);
             };
             var StorageSetter = function(key, value) {
-                window.localStorage.setItem(key, value);
+                window.localStorage.setItem(prefix + key, value);
             };
             //调用jsonp接口获取章节内容
             var getBSONP = function(url, callback) {
@@ -439,7 +439,7 @@ html {
 
         Dom.fictionContainer.css('font-size', fontSize + 'px');
         setMode(mode);
-        Dom.body.css('background', contentBg);       
+        Dom.body.css('background', contentBg);
         setColorBtn(contentBg);
 
         //设置日夜模式
@@ -469,9 +469,12 @@ html {
             //后台数据调用模块
             readerModel = ReaderModel();
             readerUI = ReaderBaseFrame(Dom.fictionContainer);
-            readerModel.init(function(data) {
+            /* readerModel.init(function(data) {
+                 readerUI(data);
+             });*/
+            readerModel.init().then(function(data) {
                 readerUI(data);
-            });     
+            });
             EvenHandler();
         }
 
@@ -480,13 +483,39 @@ html {
             // var ChapterId;
             var ChapterTotal;
             //阅读内容初始化
-            var init = function(UIcallback) {
+            var initBak = function(UIcallback) {
                 getFictionInfo(function() {
                     getCurChapterContent(function(data) {
                         UIcallback && UIcallback(data);
                     });
                 });
             };
+
+            //阅读内容初始化Promise版本, 注意与上面普通回调代码的区别, 不是通过层层传入回调函数，而是顺序化执行，执行后，调用then，再执行，调用then 
+            var init = function(UIcallback) {
+                getFictionInfoPromise()
+                    .then(function() {
+                        return getCurChapterContentPromise();
+                    })
+                    .then(function(data) {
+                        UIcallback && UIcallback(data);
+                    });
+            };
+
+            //init的Promise版本
+            var initPromise = function() {
+                var promise = new Promise(function(resolve, reject) {
+                    getFictionInfoPromise()
+                        .then(function() {
+                            return getCurChapterContentPromise();
+                        })
+                        .then(function(data) {
+                            resolve(data);
+                        });
+                });
+                return promise;
+            };
+
 
             //获取章节数据
             var getFictionInfo = function(callback) {
@@ -497,9 +526,25 @@ html {
                 }, 'json');
             };
 
+            //获取章节数据Promise版本,注意与上面普通回调代码的区别，用promise对象包裹原函数，传入resolve，reject而不是callback
+            var getFictionInfoPromise = function() {
+                var promise = new Promise(function(resolve, reject) {
+                    $.get("data/chapter.json", function(data) {
+                        if (data.result === 0) {
+                            // ChapterId = data.chapters[1].chapter_id;
+                            ChapterTotal = data.chapters.length;
+                            resolve();
+                        } else {
+                            reject();
+                        }
+                    }, 'json');
+                });
+                return promise;
+            };
+
             //通过获取url调用jsonp
             var getCurChapterContent = function(callback) {
-                $.get('data/data' + ChapterId + '.json', function(data) { 
+                $.get('data/data' + ChapterId + '.json', function(data) {
                     if (data.result === 0) {
                         var url = data.jsonp;
                         Util.getBSONP(url, function(data) {
@@ -509,6 +554,27 @@ html {
                 }, 'json');
             };
 
+            //通过获取url调用jsonp的Promise版本，注意与上面普通回调代码的区别，用promise对象包裹原函数，传入resolve，reject而不是callback
+            var getCurChapterContentPromise = function() {
+                var promise = new Promise(function(resolve, reject) {
+                    $.get('data/data' + ChapterId + '.json', function(data) {
+                        if (data.result === 0) {
+                            var url = data.jsonp;
+                            Util.getBSONP(url, function(data) {
+                                //调用resolve的同时把数据返回
+                                resolve(data);
+                            });
+                        } else {
+                            reject({
+                                result: 1
+                            });
+                        }
+                    }, 'json');
+                });
+                return promise;
+            };
+
+            //nextChapter callback版本
             var nextChapter = function(UIcallback) {
                 // ChapterId = parseInt(ChapterId, 10);
                 if (ChapterId >= ChapterTotal) {
@@ -520,22 +586,42 @@ html {
                 });
             };
 
-            var prevChapter = function(UIcallback) {
-                // ChapterId = parseInt(ChapterId, 10);
-                if (ChapterId <= 1) {
-                    return;
-                }
-                ChapterId--;
-                getCurChapterContent(function(data) {
-                    UIcallback && UIcallback(data);
+            //nextChapterPromise版本            
+            var nextChapterPromise = function() {
+                var promise = new Promise(function(resolve, reject) {
+                    // ChapterId = parseInt(ChapterId, 10);
+                    if (ChapterId >= ChapterTotal) {
+                        return;
+                    }
+                    ChapterId++;
+                    getCurChapterContentPromise().then(function(data) {
+                        resolve(data);
+                    });
                 });
+                return promise;
+            };
+
+            //prevChapterPromise版本
+            var prevChapterPromise = function() {
+                var promise = new Promise(function(resolve, reject) {
+                    // ChapterId = parseInt(ChapterId, 10);
+                    if (ChapterId <= 1) {
+                        return;
+                    }
+                    ChapterId--;
+                    getCurChapterContentPromise().then(function(data) {
+                        resolve(data);
+                    });
+                });
+                return promise;
             };
 
             //暴露数据交互接口        
             return {
-                init: init,
-                nextChapter: nextChapter,
-                prevChapter: prevChapter,
+                // init: init,
+                init: initPromise,
+                nextChapter: nextChapterPromise,
+                prevChapter: prevChapterPromise,
             };
         }
 
@@ -622,19 +708,19 @@ html {
                 Util.StorageSetter('mode', mode);
             });
 
-            $('#next-button').click(function() {                
-                readerModel.nextChapter(function(data) {
+            $('#next-button').click(function() {
+                readerModel.nextChapter().then(function(data) {
                     readerUI(data);
                 });
-                Util.StorageSetter('chapter-id', ChapterId); 
-            })
+                Util.StorageSetter('chapter-id', ChapterId);
+            });
 
             $('#prev-button').click(function() {
-                readerModel.prevChapter(function(data) {
+                readerModel.prevChapter().then(function(data) {
                     readerUI(data);
-                }); 
+                });
                 Util.StorageSetter('chapter-id', ChapterId);
-            })
+            });
         }
         main();
     })();
